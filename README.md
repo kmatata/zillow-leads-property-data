@@ -7,7 +7,7 @@ Apify actor.
 The actor pulls Zillow listings enriched with agent/broker contact info,
 full price-history timelines, 20yr+ tax history, foreclosure/distress flags,
 schools, and the resoFacts long tail (heating/cooling/construction). Pay-per-event
-pricing, no tiers, no subscription: **$0.70 per 1,000 bare rows, $1.20 per
+pricing, no subscription: **$0.70 per 1,000 bare rows, $1.20 per
 1,000 enriched rows.**
 
 - **Actor:** https://apify.com/germane_binoculars/zillow-leads-property-data
@@ -33,6 +33,7 @@ or via `apify-client` (see `examples/` below).
 | `sample/sample_listings.jsonl` | Same rows, one JSON object per line, with a nested `price_history` array per listing |
 | `examples/python_quickstart.py` | Call the actor from Python via `apify-client`, wait for results, print a summary |
 | `examples/node_quickstart.js` | Same, in Node, via `apify-client` |
+| `mcp-server/` | One-tool MCP server for Claude Desktop, Cursor and any MCP client; see `mcp-server/README.md` |
 | `notebook/zillow_leads_workflow.ipynb` | A realistic lead-gen workflow: run the actor, dedupe against a prior export, filter to rows with agent phone numbers, export a clean CSV |
 
 ## Field reference
@@ -46,9 +47,10 @@ Full field list, pricing table, and every input mode (`catalog` / `custom_search
 
 ## Dedup across repeat orders
 
-Every delivery includes a `dedup_update` (zpids + MLS IDs already shipped to
-you). Feed it back into your next order's `dedupZpids`/`dedupMlsIds` fields
-and you're never charged for the same row twice — see
+Every delivery writes a `DEDUP_UPDATE` record to the run's key-value store:
+the union of the zpids and MLS IDs you already had plus everything just shipped.
+Feed those two arrays back into your next order's `dedupZpids`/`dedupMlsIds`
+fields and you're never charged for the same row twice. See
 `notebook/zillow_leads_workflow.ipynb` for a worked example.
 
 ## Use it from an AI agent (MCP)
