@@ -1,0 +1,20 @@
+{
+  "name": "zillow-leads-property-data-mcp",
+  "version": "1.0.0",
+  "description": "MCP server exposing the zillow-leads-property-data Apify actor (agent contacts, price/tax history, foreclosure flags) as a single tool for Claude Desktop, Cursor and other MCP clients.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "zillow-leads-mcp": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test index.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@apify/actors-mcp-server": "^0.15.1"
+  }
+}
