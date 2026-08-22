@@ -26,6 +26,14 @@
             "title": "Bounding box (custom_search advanced, precise custom area)",
             "type": "object",
             "description": "custom_search only (ignored for catalog/recent_activity). A lat/lng box, for a precise custom area metro doesn't cover. North/south are latitude, east/west are longitude, and north/east must each be numerically LARGER than south/west respectively (it's a box, not two arbitrary points; a swapped box is rejected). Takes priority over metro if both are set. Leave empty to use metro instead.",
+            "properties": {
+                "north": { "type": "number", "title": "North", "description": "Top edge latitude; must be numerically larger than south." },
+                "south": { "type": "number", "title": "South", "description": "Bottom edge latitude." },
+                "east": { "type": "number", "title": "East", "description": "Right edge longitude; must be numerically larger than west." },
+                "west": { "type": "number", "title": "West", "description": "Left edge longitude." }
+            },
+            "required": ["north", "east", "south", "west"],
+            "additionalProperties": false,
             "editor": "json"
         },
         "depth": {
@@ -70,7 +78,7 @@
             "title": "Already-received zpids",
             "type": "array",
             "description": "Optional. zpids you've already received from a prior run, e.g. [43814015, 43828670]; never re-shipped.",
-            "items": { "type": "integer", "title": "zpid" },
+            "items": { "type": "integer" },
             "editor": "json",
             "prefill": []
         },
@@ -78,7 +86,7 @@
             "title": "Already-received MLS IDs",
             "type": "array",
             "description": "Optional. MLS IDs you've already received from a prior run, e.g. [\"A12046823\"]; covers re-listings, which get a new zpid but keep the same MLS ID, so zpid-only dedup would miss them.",
-            "items": { "type": "string", "title": "MLS ID" },
+            "items": { "type": "string" },
             "editor": "json",
             "prefill": []
         },
