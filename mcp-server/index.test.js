@@ -7,7 +7,9 @@ import {
   buildActorToolDefinition,
   buildUpstreamArgs,
   extractTokenArg,
+  mergeRowsIntoResult,
   routeLocally,
+  shouldAutoFollow,
 } from "./index.js";
 
 const schema = JSON.parse(readFileSync(new URL("./input-schema.json", import.meta.url), "utf8"));
@@ -65,4 +67,30 @@ test("notifications produce no response frame", () => {
     routeLocally({ jsonrpc: "2.0", method: "notifications/initialized" }, tool),
     undefined
   );
+});
+
+const RUN_STATUS = JSON.stringify({
+  status: "SUCCEEDED",
+  runId: "r1",
+  storages: { datasets: { default: { id: "ds1", itemCount: 10 } } },
+});
+
+test("shouldAutoFollow: true for small succeeded runs", () => {
+  assert.equal(shouldAutoFollow(RUN_STATUS), true);
+});
+
+test("shouldAutoFollow: false for large, failed, or malformed results", () => {
+  const big = RUN_STATUS.replace('"itemCount":10', '"itemCount":1000');
+  assert.equal(shouldAutoFollow(big), false);
+  assert.equal(shouldAutoFollow(JSON.stringify({ status: "RUNNING" })), false);
+  assert.equal(shouldAutoFollow("not json at all"), false);
+  const zero = RUN_STATUS.replace('"itemCount":10', '"itemCount":0');
+  assert.equal(shouldAutoFollow(zero), false, "zero rows has nothing to fetch");
+});
+
+test("mergeRowsIntoResult appends rows to the original metadata text", () => {
+  const merged = mergeRowsIntoResult(RUN_STATUS, [{ zpid: 7466127 }, { zpid: 31236 }]);
+  assert.ok(merged.startsWith(RUN_STATUS));
+  assert.ok(merged.includes("--- DATASET ROWS (2) ---"));
+  assert.ok(merged.includes("7466127"));
 });

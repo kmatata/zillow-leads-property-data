@@ -26,6 +26,23 @@ export const ACTOR_ID = "germane_binoculars/zillow-leads-property-data";
 const UPSTREAM_PACKAGE = "@apify/actors-mcp-server";
 const TOOL_NAME = ACTOR_ID.replaceAll("/", "--");
 const SYNTH_INIT_ID = "__wrapper_upstream_init__";
+const AUTO_FOLLOW_ID_PREFIX = "__wrapper_autofollow_";
+
+function safeParseRows(text) {
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+    // get-dataset-items wraps results as {"datasetId", "items":[...]}
+    if (Array.isArray(parsed?.items)) {
+      return parsed.items;
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
 
 /** Pure: the argv passed to the upstream actors-mcp-server binary. */
 export function buildUpstreamArgs({ tools = [ACTOR_ID] } = {}) {
@@ -122,6 +139,38 @@ function loadInputSchema() {
   return JSON.parse(readFileSync(local, "utf8"));
 }
 
+/** Pure: decide whether an actor-run result should be followed by an
+ * automatic dataset-items fetch appended to the same response. Only small,
+ * fully-succeeded runs qualify: those are the instant samples evaluators
+ * try first, where returning plumbing instead of data reads as failure.
+ * Large or partial live orders keep the explicit fire-poll-fetch flow. */
+export function shouldAutoFollow(resultText, maxItems = 25) {
+  let parsed;
+  try {
+    parsed = JSON.parse(resultText);
+  } catch {
+    return false;
+  }
+  const dataset = parsed?.storages?.datasets?.default;
+  return (
+    parsed?.status === "SUCCEEDED" &&
+    typeof dataset?.id === "string" &&
+    Number.isInteger(dataset?.itemCount) &&
+    dataset.itemCount > 0 &&
+    dataset.itemCount <= maxItems
+  );
+}
+
+/** Pure: append fetched rows to the original run-status text so the caller
+ * receives run metadata AND the data in a single response frame. */
+export function mergeRowsIntoResult(resultText, rows) {
+  return (
+    resultText +
+    "\n\n--- DATASET ROWS (" + rows.length + ") ---\n" +
+    JSON.stringify(rows, null, 2)
+  );
+}
+
 export function main({ argv = process.argv.slice(2), env = process.env } = {}) {
   const { token, rest } = extractTokenArg(argv);
   if (token && !env.APIFY_TOKEN) {
@@ -154,6 +203,35 @@ export function main({ argv = process.argv.slice(2), env = process.env } = {}) {
     { stdio: ["pipe", "pipe", "inherit"], env }
   );
 
+  // Actor-tool calls that qualify for auto-follow (small succeeded samples)
+  // hold their response while we fetch the dataset rows, then deliver run
+  // metadata and rows in one frame. Keyed by the client's request id.
+  // Keyed entries: { stage: "run" | "rows", followId?, originalText?,
+  // originalResult?, timer? }. The 15s timer guarantees a stuck follow-up
+  // can never hang the client: it flushes the unmerged run response.
+  const pending = new Map();     // client-id string -> entry
+  const byFollowId = new Map();  // synthetic follow-up id -> same key string
+  let followSeq = 0;
+
+  const finishPending = (key) => {
+    const entry = pending.get(key);
+    if (!entry) return;
+    if (entry.followId !== undefined) byFollowId.delete(entry.followId);
+    clearTimeout(entry.timer);
+    pending.delete(key);
+  };
+
+  // Emit the held, unmerged run frame (auto-follow declined or timed out).
+  const emitHeld = (key) => {
+    const entry = pending.get(key);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    if (entry.originalFrame) {
+      process.stdout.write(JSON.stringify(entry.originalFrame) + "\n");
+    }
+    finishPending(key);
+  };
+
   // Prime the upstream session so forwarded tools/call arrive post-init.
   upstream.stdin.write(
     JSON.stringify({
@@ -171,19 +249,83 @@ export function main({ argv = process.argv.slice(2), env = process.env } = {}) {
     JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n"
   );
 
-  // Upstream -> client, minus the synthetic init's response frame.
   const upstreamLines = createInterface({ input: upstream.stdout });
   upstreamLines.on("line", (line) => {
+    let parsed;
     try {
-      if (JSON.parse(line)?.id !== SYNTH_INIT_ID) {
-        process.stdout.write(line + "\n");
-      }
+      parsed = JSON.parse(line);
     } catch {
       process.stdout.write(line + "\n");
+      return;
     }
+    if (parsed.id === SYNTH_INIT_ID) {
+      return;
+    }
+
+    let key = String(parsed.id);
+    if (!pending.has(key)) {
+      const ownerKey = byFollowId.get(key);
+      if (ownerKey === undefined || !pending.has(ownerKey)) {
+        process.stdout.write(JSON.stringify(parsed) + "\n");
+        return;
+      }
+      key = ownerKey;
+    }
+    const entry = pending.get(key);
+
+    if (entry.stage === "run") {
+      const text = parsed.result?.content?.[0]?.text ?? "";
+      if (!shouldAutoFollow(text)) {
+        emitHeld(key);
+        return;
+      }
+      const runInfo = JSON.parse(text);
+      const dataset = runInfo.storages.datasets.default;
+      entry.originalText = text;
+      entry.originalFrame = parsed;
+      entry.stage = "rows";
+      // Unique synthetic id: reusing the client's id would collide with
+      // the request upstream just answered, and the dataset fetch would
+      // be silently dropped.
+      entry.followId = `${AUTO_FOLLOW_ID_PREFIX}${++followSeq}`;
+      entry.followKeyRegistered = true;
+      byFollowId.set(entry.followId, key);
+      entry.timer = setTimeout(() => emitHeld(key), 15000);
+      upstream.stdin.write(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: entry.followId,
+          method: "tools/call",
+          params: {
+            name: "get-dataset-items",
+            arguments: { datasetId: dataset.id, limit: dataset.itemCount },
+          },
+        }) + "\n"
+      );
+      return;
+    }
+
+    const rowsBlock = Array.isArray(parsed.result?.content)
+      ? parsed.result.content.find((b) => b.type === "text")
+      : null;
+    const rows = safeParseRows(rowsBlock?.text ?? "");
+    finishPending(key);
+    const frame =
+      rows.length > 0
+        ? {
+            jsonrpc: "2.0",
+            id: entry.clientId,
+            result: {
+              ...parsed.result,
+              content: [
+                { type: "text", text: mergeRowsIntoResult(entry.originalText, rows) },
+              ],
+            },
+          }
+        : entry.originalFrame;
+    process.stdout.write(JSON.stringify(frame) + "\n");
   });
 
-  // Client -> local answers where possible, upstream for real work.
   const clientLines = createInterface({ input: process.stdin });
   clientLines.on("line", (line) => {
     let msg;
@@ -198,6 +340,14 @@ export function main({ argv = process.argv.slice(2), env = process.env } = {}) {
         process.stdout.write(JSON.stringify(local) + "\n");
       }
       return;
+    }
+
+    if (
+      msg.method === "tools/call" &&
+      msg.params?.name === TOOL_NAME &&
+      msg.id !== undefined
+    ) {
+      pending.set(String(msg.id), { stage: "run", clientId: msg.id });
     }
     upstream.stdin.write(JSON.stringify(msg) + "\n");
   });
