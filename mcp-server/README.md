@@ -56,6 +56,13 @@ filtered to this actor):
 }
 ```
 
+## What a call looks like
+
+An AI agent calling the actor through this server, one tool call, enriched
+leads summarized back (phone numbers redacted here):
+
+![An AI agent calling zillow-leads-property-data via MCP](https://raw.githubusercontent.com/kmatata/zillow-leads-property-data/main/assets/mcp-agent-catalog-sample.png)
+
 ## Tool input in 30 seconds
 
 The fastest first call is catalog mode, which returns cached rows in
