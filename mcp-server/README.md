@@ -88,6 +88,35 @@ Live-collect orders take minutes to hours because enrichment is paced to
 respect Zillow's anti-bot layer; the full input schema is documented on the
 [actor page](https://apify.com/germane_binoculars/zillow-leads-property-data).
 
+## Glama hosting configuration
+
+On glama.ai's admin panel, this server is configured with:
+
+Command:
+
+```json
+["node", "index.js", "--apify-token", "${APIFY_TOKEN}"]
+```
+
+Environment-variable JSON schema:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "APIFY_TOKEN": {
+      "title": "Apify API Token",
+      "type": "string",
+      "description": "Apify API token from console.apify.com/settings/integrations. The token's account pays the actor's pay-per-event charges: about $0.03 for a 25-row instant catalog sample, about $1.20 per 1,000 fully enriched rows."
+    }
+  },
+  "required": ["APIFY_TOKEN"]
+}
+```
+
+`--apify-token` also works for any manual launch where setting environment
+variables is awkward; the env var takes precedence when both are present.
+
 ## Tests
 
 ```bash

@@ -37,10 +37,36 @@ function resolveUpstreamBin() {
   return stdioEntry;
 }
 
+/** Pure: split forwarded argv into a --apify-token option (space or =
+ * form) and everything else. Glama hosting passes configured secrets as
+ * ${VAR} placeholders inside its startup-arguments array, so the token
+ * can arrive as a CLI argument there; desktop clients keep using the env
+ * var, which still takes precedence when both are present. */
+export function extractTokenArg(argv) {
+  const rest = [];
+  let token;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--apify-token") {
+      token = argv[i + 1];
+      i += 1;
+    } else if (typeof argv[i] === "string" && argv[i].startsWith("--apify-token=")) {
+      token = argv[i].slice("--apify-token=".length);
+    } else {
+      rest.push(argv[i]);
+    }
+  }
+  return { token, rest };
+}
+
 export function main({ argv = process.argv.slice(2), env = process.env } = {}) {
+  const { token, rest } = extractTokenArg(argv);
+  if (token && !env.APIFY_TOKEN) {
+    env.APIFY_TOKEN = token;
+  }
+
   if (!env.APIFY_TOKEN) {
     console.error(
-      "APIFY_TOKEN is required. Export it (or add it to your MCP client config): " +
+      "APIFY_TOKEN is required (set it in the environment or pass --apify-token): " +
       "https://console.apify.com/settings/integrations"
     );
     process.exitCode = 1;
@@ -58,7 +84,7 @@ export function main({ argv = process.argv.slice(2), env = process.env } = {}) {
     return;
   }
 
-  const child = spawn(process.execPath, [binPath, ...buildUpstreamArgs(), ...argv], {
+  const child = spawn(process.execPath, [binPath, ...buildUpstreamArgs(), ...rest], {
     stdio: "inherit",
     env,
   });
