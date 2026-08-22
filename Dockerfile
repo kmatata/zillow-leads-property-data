@@ -7,6 +7,6 @@ WORKDIR /app/mcp-server
 COPY mcp-server/package.json mcp-server/package-lock.json ./
 RUN npm ci --omit=dev
 
-COPY mcp-server/index.js ./
+COPY mcp-server/index.js mcp-server/input-schema.json ./
 
 CMD ["node", "index.js"]

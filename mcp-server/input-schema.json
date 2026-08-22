@@ -1,0 +1,93 @@
+{
+    "title": "Zillow Leads & Property Data input",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "mode": {
+            "title": "1. What do you want to collect?",
+            "type": "string",
+            "description": "Pick ONE mode; only that mode's fields apply. Catalog: instant snapshot from the pre-seeded catalog pool, returns in seconds, always fully enriched; metro (below) optionally scopes it to one metro, otherwise the whole pool counts. Custom search: your own lat/lng bounding box or a named metro, live-collected, the only mode with a cheaper 'listings' depth option. Recent activity: Zillow's sitemap feed of newest/changed listings nationwide, no bounds, always fully enriched.",
+            "enum": ["catalog", "custom_search", "recent_activity"],
+            "enumTitles": ["Catalog (instant snapshot)", "Custom search (bounding box)", "Recent activity (sitemap feed)"],
+            "default": "catalog",
+            "editor": "select"
+        },
+        "metro": {
+            "sectionCaption": "2. Area (custom_search + catalog)",
+            "sectionDescription": "metro is read by BOTH catalog (optional scope filter) and custom_search (required if bounds is not set). bounds is custom_search only. Ignored entirely for recent_activity, which has no bounds concept.",
+            "title": "Metro",
+            "type": "string",
+            "description": "Pick a named metro instead of typing lat/lng bounds by hand. Covers the metro's whole urbanized area, not just city limits, so results genuinely include real suburbs along with the named city (e.g. Phoenix also returns Scottsdale/Tempe/Glendale); see the README. For custom_search: required if bounds is not set; bounds always wins when both are present. For catalog: optional, scopes the instant snapshot to this metro instead of the whole cached pool; leave unset to use everything cached. For recent_activity: ignored.",
+            "enum": ["New York City", "Los Angeles", "Chicago", "Houston", "Phoenix", "Philadelphia", "San Antonio", "San Diego", "Dallas", "San Jose", "Austin", "Jacksonville", "Denver", "Seattle", "Charlotte", "San Francisco", "Pittsburgh", "Miami", "Detroit", "Baltimore"],
+            "default": "Phoenix",
+            "editor": "select"
+        },
+        "bounds": {
+            "title": "Bounding box (custom_search advanced, precise custom area)",
+            "type": "object",
+            "description": "custom_search only (ignored for catalog/recent_activity). A lat/lng box, for a precise custom area metro doesn't cover. North/south are latitude, east/west are longitude, and north/east must each be numerically LARGER than south/west respectively (it's a box, not two arbitrary points; a swapped box is rejected). Takes priority over metro if both are set. Leave empty to use metro instead.",
+            "editor": "json"
+        },
+        "depth": {
+            "title": "Depth (custom_search only)",
+            "type": "string",
+            "description": "Only read when mode = custom_search; ignored (always enriched) for catalog and recent_activity. 'listings': bare address/price/beds/baths/status, cheaper, faster (see README 'Bare listing schema'). 'enriched': full agent contact, price/tax history, foreclosure, schools, resoFacts (see README 'Enriched schema'), costs more per row.",
+            "enum": ["listings", "enriched"],
+            "enumTitles": ["Listings (bare, cheaper, faster)", "Enriched (full detail)"],
+            "default": "enriched",
+            "editor": "select"
+        },
+        "source": {
+            "sectionCaption": "3. Recent activity mode options",
+            "sectionDescription": "Only read when mode = recent_activity. Ignored for the other two modes.",
+            "title": "Sitemap feed to pull from (REQUIRED for recent_activity)",
+            "type": "string",
+            "description": "Which Zillow sitemap feed to pull recent activity from. Always fully enriched (no bare/listings option exists for this mode; the sitemap feed itself carries nothing beyond a listing URL, so there's no cheaper variant to offer).",
+            "enum": ["agent", "owner"],
+            "enumTitles": ["Agent-listed (bulk of inventory)", "Owner-listed (FSBO, smaller feed)"],
+            "default": "agent",
+            "editor": "select"
+        },
+        "minListings": {
+            "sectionCaption": "4. Minimums (how many rows you'll get)",
+            "sectionDescription": "These are FLOORS, not targets or hard limits. You may get more than the minimum shipped in one delivery (e.g. a whole cached chunk), but never less unless timeoutSecs runs out first. A short wait for a live collection to reach the minimum is expected, not a bug; see README's 'Why enrichment is slower than listings'. The technical lower bound of 1 below is just to reject nonsensical zero/negative input; it is NOT a recommended value. 1000 (the default) is the recommended floor, matching the 1000-per-metro catalog seeding target.",
+            "title": "Minimum total rows",
+            "type": "integer",
+            "description": "Optional, defaults to 1000 (the recommended floor). The floor for how many rows (bare or enriched, whichever depth you asked for) this run must return before considering itself done. Applies to every mode. Set lower (e.g. 10-50) only for a quick test run before committing to a full one.",
+            "default": 1000,
+            "minimum": 1
+        },
+        "minEnriched": {
+            "title": "Minimum enriched rows",
+            "type": "integer",
+            "description": "Optional, defaults to 500 (the recommended floor). Only meaningful when rows are actually being enriched: custom_search + depth=enriched, catalog, or recent_activity. Ignored (forced to 0 internally) for custom_search + depth=listings, since a listings-depth order never enriches anything by design. Must be <= whatever minListings you set; asking for more enriched rows than total rows is a nonsensical order and won't be satisfiable.",
+            "default": 500,
+            "minimum": 1
+        },
+        "dedupZpids": {
+            "sectionCaption": "5. Dedup (only needed for a REPEAT order)",
+            "sectionDescription": "Leave both dedup fields empty on your first order. Every delivery writes a DEDUP_UPDATE record to the run's key-value store (the union of what you already had plus everything just shipped); copy its two arrays into these fields on your NEXT order so you never pay for the same row twice.",
+            "title": "Already-received zpids",
+            "type": "array",
+            "description": "Optional. zpids you've already received from a prior run, e.g. [43814015, 43828670]; never re-shipped.",
+            "editor": "json",
+            "prefill": []
+        },
+        "dedupMlsIds": {
+            "title": "Already-received MLS IDs",
+            "type": "array",
+            "description": "Optional. MLS IDs you've already received from a prior run, e.g. [\"A12046823\"]; covers re-listings, which get a new zpid but keep the same MLS ID, so zpid-only dedup would miss them.",
+            "editor": "json",
+            "prefill": []
+        },
+        "timeoutSecs": {
+            "sectionCaption": "6. Run settings",
+            "title": "Timeout (seconds)",
+            "type": "integer",
+            "description": "Optional, defaults to 7200 (2 hours), minimum 300 (5 minutes). Max wait for the minimums to be satisfied before returning a partial dataset. A cache-satisfiable order (catalog, or already-covered ground) finishes in seconds regardless; this only matters when live collection is needed. The 5-min floor exists because live collection needs that long for PX-safe warmup pacing.",
+            "default": 7200,
+            "minimum": 300
+        }
+    },
+    "required": []
+}
