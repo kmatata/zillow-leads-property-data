@@ -70,6 +70,7 @@
             "title": "Already-received zpids",
             "type": "array",
             "description": "Optional. zpids you've already received from a prior run, e.g. [43814015, 43828670]; never re-shipped.",
+            "items": { "type": "integer", "title": "zpid" },
             "editor": "json",
             "prefill": []
         },
@@ -77,6 +78,7 @@
             "title": "Already-received MLS IDs",
             "type": "array",
             "description": "Optional. MLS IDs you've already received from a prior run, e.g. [\"A12046823\"]; covers re-listings, which get a new zpid but keep the same MLS ID, so zpid-only dedup would miss them.",
+            "items": { "type": "string", "title": "MLS ID" },
             "editor": "json",
             "prefill": []
         },
