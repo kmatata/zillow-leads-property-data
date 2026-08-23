@@ -102,10 +102,29 @@ documented on the
   the client gives up.
 - **Lost the runId?** Every companion workflow tool takes an ID, so the
   server also exposes no-ID discovery tools: `get-actor-run-list`
-  (`{ "desc": true }`, newest first — each entry carries
-  `defaultDatasetId`/`defaultKeyValueStoreId`), plus `get-dataset-list`,
-  `get-key-value-store-list`, `get-key-value-store-keys`, and
-  `get-actor-run-log` to watch collection progress.
+  (`{ "desc": true }`, newest first — each entry's `id` field is the runId,
+  and entries carry `defaultDatasetId`/`defaultKeyValueStoreId`; the list
+  is account-wide, so match on `actId` if you share the account), plus
+  `get-dataset-list`, `get-key-value-store-list`,
+  `get-key-value-store-keys`, and `get-actor-run-log` to watch collection
+  progress.
+
+## Where every ID comes from, and how calls fail
+
+| Input (tool) | Legitimate source | Failure mode when wrong |
+|---|---|---|
+| `runId` (get-actor-run, get-actor-run-log, abort-actor-run) | Actor tool response `.runId`, or `id` in get-actor-run-list | Upstream returns a clean not-found error; nothing billed |
+| `datasetId` (get-dataset-items) | Run response `storages.datasets.default.id`, or `defaultDatasetId` from a run/run-list entry | Clean not-found error. Note: run datasets are unnamed — `username~name` aliases work only for named stores/datasets |
+| `keyValueStoreId` (get-key-value-store-record/keys) | Run response `storages.keyValueStores.default.id`, or `defaultKeyValueStoreId` | Clean not-found error. The broker store *is* named: `username~zillow-leads-broker` works for order manifests |
+| `recordKey` (get-key-value-store-record) | `ORDER_SUMMARY`, `DEDUP_UPDATE`, `STATUS`, `INPUT` on a run's store; enumerate unknown stores with get-key-value-store-keys | Reading a key before it's written returns empty — poll or list keys first |
+
+Other inputs that can bite: `limit` maxes differ per tool (10 for runs/
+stores/keys, 20 for dataset-list, uncapped-but-defaults-to-20 for dataset
+items); a huge `lines: 0` log fetch can flood a chat context; and any run
+that actually starts bills its per-event charges even if you abort it
+momently after — validation errors at the platform level are the only
+free failures. Tool schemas here mirror upstream 0.15.1 exactly, so an
+argument this server accepts is an argument upstream accepts.
 
 ## Testing in Glama vs locally
 

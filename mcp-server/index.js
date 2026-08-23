@@ -198,7 +198,7 @@ export const COMPANION_TOOL_DEFINITIONS = [
   {
     name: "get-actor-run-list",
     description:
-      "List your Actor runs, newest first — the recovery entry point when a previous actor-tool call was lost to a client timeout. Each entry carries the runId plus defaultDatasetId/defaultKeyValueStoreId, which is everything the companion tools need.",
+      "List Actor runs for the authenticated user, newest first with desc=true — the recovery entry point when a previous actor-tool call was lost to a client timeout. Account-wide (there is no per-actor filter): match entries on their actId if the account runs other actors too. Each entry's id field is the runId the companion tools take, and entries also carry defaultDatasetId and defaultKeyValueStoreId.",
     inputSchema: {
       type: "object",
       properties: {
@@ -283,7 +283,7 @@ export function routeLocally(msg, toolDefinition, protocolVersion) {
         serverInfo: {
           name: "zillow-leads-property-data",
           title: "Zillow Leads & Property Data (one-tool server)",
-          version: "1.0.7",
+          version: "1.0.8",
         },
       },
     };
