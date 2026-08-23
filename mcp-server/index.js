@@ -44,8 +44,22 @@ function safeParseRows(text) {
   }
 }
 
+/** Pure: the argv passed to the upstream actors-mcp-server binary. The
+ * five discovery selectors are internal tool names upstream knows how to
+ * route (they never collide with actor-id parsing), and they close the
+ * chicken-and-egg hole in the default surface: without a run-list tool,
+ * a client that lost the runId (client-side timeout, closed session) has
+ * no way back into its own run's data. */
+export const DISCOVERY_TOOL_SELECTORS = [
+  "get-actor-run-list",
+  "get-actor-run-log",
+  "get-dataset-list",
+  "get-key-value-store-list",
+  "get-key-value-store-keys",
+];
+
 /** Pure: the argv passed to the upstream actors-mcp-server binary. */
-export function buildUpstreamArgs({ tools = [ACTOR_ID] } = {}) {
+export function buildUpstreamArgs({ tools = [ACTOR_ID, ...DISCOVERY_TOOL_SELECTORS] } = {}) {
   return ["--tools", tools.join(",")];
 }
 
@@ -79,7 +93,7 @@ export function buildActorToolDefinition(inputSchema) {
     waitSecs: {
       type: "integer",
       title: "Wait seconds",
-      description: "Max seconds (0-45, default 30) to block on this single call waiting for terminal run status. Long-running orders return a status plus nextStep instead.",
+      description: "Max seconds (0-45) to block on this single call waiting for terminal run status. Unset: catalog smoke tests block up to 30s and often return rows in one call; every other mode is fire-and-forget (returns runId immediately) because collection takes minutes. Poll with get-actor-run, then fetch rows with get-dataset-items.",
       default: 30,
     },
   };
@@ -87,16 +101,36 @@ export function buildActorToolDefinition(inputSchema) {
     name: TOOL_NAME,
     description:
       `Calls the Actor "${ACTOR_ID}" and retrieves its output results: Zillow listings enriched with agent/broker contact info, price/tax history, foreclosure flags, and schools. ` +
-      "Live-collect orders take minutes; when still running the call returns a status plus nextStep telling you how to poll via get-actor-run, then fetch rows with get-dataset-items.",
+      "Catalog mode is an instant paid sample that usually returns rows in a single call. Every other mode dispatches a live-collection order measured in minutes to hours; such calls return a runId plus status immediately — poll via get-actor-run, then fetch rows with get-dataset-items. " +
+      "If a previous call was lost to a client timeout, DO NOT re-submit (you would pay twice): recover the existing runId with get-actor-run-list.",
     inputSchema: { type: "object", properties, required: [] },
   };
 }
 
-/** Static definitions for the four companion tools the upstream server
- * exposes alongside the actor tool. Serving them from the local answers
- * keeps directory checks and runtime discovery identical: a check running
- * on placeholder credentials sees the full five-tool surface users get,
- * not a truncated one. Schemas mirror the upstream implementation. */
+/** Pure: rewrite actor-tool arguments before forwarding upstream. The
+ * upstream server applies its own 30s blocking default when a client omits
+ * waitSecs — fine for instant catalog samples, fatal for live-collection
+ * orders, which can never finish inside one call and whose clients
+ * (Inspector ~60s, Glama chat, hosted agents) each impose their own shorter
+ * request budget on top. So when the caller left waitSecs unset AND the
+ * order is not a catalog sample, inject fire-and-forget: the call returns
+ * the runId in seconds instead of blocking 30-45s for data that cannot be
+ * there yet. Explicit waitSecs values are always honored as-is. */
+export function normalizeActorToolArguments(args) {
+  const input = args ?? {};
+  if (input.waitSecs !== undefined || (input.mode ?? "catalog") === "catalog") {
+    return input;
+  }
+  return { ...input, waitSecs: 0 };
+}
+
+/** Static definitions for the companion tools the upstream server exposes
+ * alongside the actor tool: the four auto-injected workflow helpers plus
+ * five discovery tools (selected via DISCOVERY_TOOL_SELECTORS). Serving
+ * them from the local answers keeps directory checks and runtime discovery
+ * identical: a check running on placeholder credentials sees the full
+ * ten-tool surface users get, not a truncated one. Schemas mirror the
+ * upstream implementations. */
 export const COMPANION_TOOL_DEFINITIONS = [
   {
     name: "get-actor-run",
@@ -155,6 +189,80 @@ export const COMPANION_TOOL_DEFINITIONS = [
       required: ["runId"],
     },
   },
+  // Discovery tools. The four companions above all require an ID that only
+  // the actor tool's own response hands out, so a client that lost that
+  // response (Inspector/Glama request timeout, closed session) had no way
+  // back into its already-billed run. These five need no prior IDs and make
+  // the surface self-healing; upstream registers them because
+  // buildUpstreamArgs passes their selectors in --tools.
+  {
+    name: "get-actor-run-list",
+    description:
+      "List your Actor runs, newest first — the recovery entry point when a previous actor-tool call was lost to a client timeout. Each entry carries the runId plus defaultDatasetId/defaultKeyValueStoreId, which is everything the companion tools need.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        offset: { type: "number", default: 0, description: "Number of array elements that should be skipped at the start. The default value is 0." },
+        limit: { type: "number", maximum: 10, default: 10, description: "Maximum number of array elements to return. The default value (as well as the maximum) is 10." },
+        desc: { type: "boolean", default: false, description: "If true, runs are sorted by startedAt descending (newest first)." },
+        status: { type: "string", enum: ["READY", "RUNNING", "SUCCEEDED", "FAILED", "TIMING-OUT", "TIMED-OUT", "ABORTING", "ABORTED"], description: "Return only runs with the provided status." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get-actor-run-log",
+    description: "Retrieve recent log lines for a specific Actor run — live collection progress, or the tail of a FAILED run.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        runId: { type: "string", minLength: 1, description: "The ID of the Actor run." },
+        lines: { type: "number", maximum: 50, default: 10, description: "Output the last NUM lines, instead of the last 10. Pass 0 to return the entire log." },
+      },
+      required: ["runId"],
+    },
+  },
+  {
+    name: "get-dataset-list",
+    description: "List datasets on the account — locates a run's output dataset when its ID was lost. Actor runs produce unnamed datasets, so set unnamed=true.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        offset: { type: "number", default: 0, description: "Number of array elements that should be skipped at the start. Default is 0." },
+        limit: { type: "number", maximum: 20, default: 10, description: "Maximum number of array elements to return. Default is 10. Maximum is 20." },
+        desc: { type: "boolean", default: false, description: "If true, datasets are sorted by createdAt descending (newest first)." },
+        unnamed: { type: "boolean", default: false, description: "If true, all datasets are returned. Default is false (named datasets only) — actor runs produce unnamed datasets, so pass true here." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get-key-value-store-list",
+    description: "List key-value stores on the account — locates a run's store (ORDER_SUMMARY / DEDUP_UPDATE / STATUS records) when its ID was lost. Set unnamed=true to include run-produced stores.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        offset: { type: "number", default: 0, description: "Number of array elements that should be skipped at the start. Default is 0." },
+        limit: { type: "number", maximum: 10, default: 10, description: "Maximum number of array elements to return. Default is 10. Maximum is 10." },
+        desc: { type: "boolean", default: false, description: "If true, stores are sorted by createdAt descending (newest first)." },
+        unnamed: { type: "boolean", default: false, description: "If true, all stores are returned. Default is false (named key-value stores only)." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get-key-value-store-keys",
+    description: "List the keys in a key-value store with pagination — for this actor's runs, look for ORDER_SUMMARY, DEDUP_UPDATE and STATUS.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        keyValueStoreId: { type: "string", minLength: 1, description: "Key-value store ID or username~store-name." },
+        exclusiveStartKey: { type: "string", description: "All keys up to this one (including) are skipped from the result." },
+        limit: { type: "number", maximum: 10, description: "Number of keys to be returned. Maximum is 10." },
+      },
+      required: ["keyValueStoreId"],
+    },
+  },
 ];
 
 /** Pure: answer protocol-level requests locally, or null to forward
@@ -175,7 +283,7 @@ export function routeLocally(msg, toolDefinition, protocolVersion) {
         serverInfo: {
           name: "zillow-leads-property-data",
           title: "Zillow Leads & Property Data (one-tool server)",
-          version: "1.0.2",
+          version: "1.0.7",
         },
       },
     };
@@ -416,6 +524,7 @@ export function main({ argv = process.argv.slice(2), env = process.env } = {}) {
       msg.params?.name === TOOL_NAME &&
       msg.id !== undefined
     ) {
+      msg.params.arguments = normalizeActorToolArguments(msg.params.arguments);
       pending.set(String(msg.id), { stage: "run", clientId: msg.id });
     }
     upstream.stdin.write(JSON.stringify(msg) + "\n");

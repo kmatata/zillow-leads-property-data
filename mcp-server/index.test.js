@@ -7,8 +7,10 @@ import {
   buildActorToolDefinition,
   buildUpstreamArgs,
   COMPANION_TOOL_DEFINITIONS,
+  DISCOVERY_TOOL_SELECTORS,
   extractTokenArg,
   mergeRowsIntoResult,
+  normalizeActorToolArguments,
   routeLocally,
   shouldAutoFollow,
 } from "./index.js";
@@ -16,8 +18,18 @@ import {
 const schema = JSON.parse(readFileSync(new URL("./input-schema.json", import.meta.url), "utf8"));
 const tool = buildActorToolDefinition(schema);
 
-test("buildUpstreamArgs pins the wrapper to exactly our actor", () => {
-  assert.deepEqual(buildUpstreamArgs(), ["--tools", ACTOR_ID]);
+test("buildUpstreamArgs pins the wrapper to our actor plus the discovery selectors", () => {
+  assert.deepEqual(buildUpstreamArgs(), [
+    "--tools",
+    [ACTOR_ID, ...DISCOVERY_TOOL_SELECTORS].join(","),
+  ]);
+});
+
+test("discovery selectors are internal tool names upstream routes, not actor ids", () => {
+  for (const selector of DISCOVERY_TOOL_SELECTORS) {
+    assert.ok(!selector.includes("/"), `${selector} must not parse as an actor id`);
+    assert.match(selector, /^get-/);
+  }
 });
 
 test("buildUpstreamArgs forwards a custom tool list", () => {
@@ -53,17 +65,53 @@ test("routeLocally answers initialize with our server info", () => {
   assert.equal(res.result.protocolVersion, "2025-06-18");
 });
 
-test("routeLocally serves the actor tool plus all four companions", () => {
+test("routeLocally serves the actor tool plus all nine companions", () => {
   const res = routeLocally({ jsonrpc: "2.0", id: 2, method: "tools/list" }, tool);
   assert.equal(res.result.tools[0], tool);
   assert.deepEqual(
     res.result.tools.slice(1).map((tool) => tool.name),
-    ["get-actor-run", "get-dataset-items", "get-key-value-store-record", "abort-actor-run"]
+    [
+      "get-actor-run",
+      "get-dataset-items",
+      "get-key-value-store-record",
+      "abort-actor-run",
+      ...DISCOVERY_TOOL_SELECTORS,
+    ]
   );
   for (const companion of COMPANION_TOOL_DEFINITIONS) {
-    assert.ok(companion.description.length > 20);
-    assert.ok(companion.inputSchema.required.length > 0);
+    assert.ok(companion.description.length > 20, `${companion.name} needs a real description`);
+    assert.ok(Array.isArray(companion.inputSchema.required), `${companion.name} must declare required`);
   }
+  const required = Object.fromEntries(COMPANION_TOOL_DEFINITIONS.map((c) => [c.name, c.inputSchema.required]));
+  for (const name of ["get-actor-run-list", "get-dataset-list", "get-key-value-store-list"]) {
+    assert.deepEqual(required[name], [], `${name} is the no-ID discovery path and must require nothing`);
+  }
+  assert.deepEqual(required["get-actor-run"], ["runId"]);
+  assert.deepEqual(required["abort-actor-run"], ["runId"]);
+  assert.deepEqual(required["get-actor-run-log"], ["runId"]);
+  assert.deepEqual(required["get-key-value-store-keys"], ["keyValueStoreId"]);
+});
+
+test("normalizeActorToolArguments makes non-catalog orders fire-and-forget by default", () => {
+  assert.deepEqual(
+    normalizeActorToolArguments({ mode: "custom_search", metro: "Phoenix", minListings: 100 }),
+    { mode: "custom_search", metro: "Phoenix", minListings: 100, waitSecs: 0 }
+  );
+  assert.deepEqual(
+    normalizeActorToolArguments({ mode: "recent_activity", source: "agent" }),
+    { mode: "recent_activity", source: "agent", waitSecs: 0 }
+  );
+  assert.deepEqual(
+    normalizeActorToolArguments({ mode: "catalog", minListings: 25 }),
+    { mode: "catalog", minListings: 25 },
+    "catalog smoke tests keep upstream's blocking default"
+  );
+  assert.deepEqual(normalizeActorToolArguments(undefined), {}, "no mode means catalog-shaped; untouched");
+  assert.deepEqual(
+    normalizeActorToolArguments({ mode: "custom_search", waitSecs: 45 }),
+    { mode: "custom_search", waitSecs: 45 },
+    "explicit waitSecs always wins"
+  );
 });
 
 test("routeLocally returns null to forward real work upstream", () => {
