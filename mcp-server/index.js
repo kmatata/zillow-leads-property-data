@@ -92,6 +92,71 @@ export function buildActorToolDefinition(inputSchema) {
   };
 }
 
+/** Static definitions for the four companion tools the upstream server
+ * exposes alongside the actor tool. Serving them from the local answers
+ * keeps directory checks and runtime discovery identical: a check running
+ * on placeholder credentials sees the full five-tool surface users get,
+ * not a truncated one. Schemas mirror the upstream implementation. */
+export const COMPANION_TOOL_DEFINITIONS = [
+  {
+    name: "get-actor-run",
+    description:
+      "Get detailed information about a specific Actor run: status, storages (datasets/key-value stores alias map), stats, summary, nextStep.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        runId: { type: "string", minLength: 1, description: "The ID of the Actor run." },
+        waitSecs: { type: "integer", default: 30, minimum: 0, maximum: 45, description: "Max seconds to wait for terminal status (SUCCEEDED, FAILED, ABORTED, TIMED-OUT). 0 returns immediately." },
+      },
+      required: ["runId"],
+    },
+  },
+  {
+    name: "get-dataset-items",
+    description:
+      "Get items (rows) from a dataset — the output/results produced by an Actor run. When the actor tool returns RUNNING, this fetches rows once terminal.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        datasetId: { type: "string", minLength: 1, description: "Dataset ID or username~dataset-name." },
+        clean: { type: "boolean", description: "If true, returns only non-empty items and skips hidden fields." },
+        limit: { type: "integer", minimum: 1, default: 20, description: "Maximum number of items to return." },
+        offset: { type: "number", description: "Number of items to skip at the start." },
+        fields: { type: "string", description: "Comma-separated list of fields to include (dot notation supported)." },
+        omit: { type: "string", description: "Comma-separated list of fields to exclude." },
+        desc: { type: "boolean", description: "If true, results are returned newest first." },
+        flatten: { type: "string", description: "Comma-separated list of fields to flatten." },
+      },
+      required: ["datasetId"],
+    },
+  },
+  {
+    name: "get-key-value-store-record",
+    description:
+      "Get a single record from a run's key-value store: ORDER_SUMMARY (what actually applied), DEDUP_UPDATE (re-upload on your next order), STATUS (zero-row explanation).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        keyValueStoreId: { type: "string", minLength: 1, description: "Key-value store ID or username~store-name." },
+        recordKey: { type: "string", minLength: 1, description: "Key of the record to retrieve." },
+      },
+      required: ["keyValueStoreId", "recordKey"],
+    },
+  },
+  {
+    name: "abort-actor-run",
+    description: "Abort an Actor run that is currently starting or running. Results include the updated run details.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        runId: { type: "string", minLength: 1, description: "The ID of the Actor run to abort." },
+        gracefully: { type: "boolean", description: "If true, aborts gracefully with a 30-second timeout." },
+      },
+      required: ["runId"],
+    },
+  },
+];
+
 /** Pure: answer protocol-level requests locally, or null to forward
  * upstream. Notifications produce no response at all. */
 export function routeLocally(msg, toolDefinition, protocolVersion) {
@@ -116,7 +181,11 @@ export function routeLocally(msg, toolDefinition, protocolVersion) {
     };
   }
   if (msg.method === "tools/list") {
-    return { jsonrpc: "2.0", id: msg.id, result: { tools: [toolDefinition] } };
+    return {
+      jsonrpc: "2.0",
+      id: msg.id,
+      result: { tools: [toolDefinition, ...COMPANION_TOOL_DEFINITIONS] },
+    };
   }
   return null;
 }

@@ -6,6 +6,7 @@ import {
   ACTOR_ID,
   buildActorToolDefinition,
   buildUpstreamArgs,
+  COMPANION_TOOL_DEFINITIONS,
   extractTokenArg,
   mergeRowsIntoResult,
   routeLocally,
@@ -52,9 +53,17 @@ test("routeLocally answers initialize with our server info", () => {
   assert.equal(res.result.protocolVersion, "2025-06-18");
 });
 
-test("routeLocally serves tools/list from the static definition", () => {
+test("routeLocally serves the actor tool plus all four companions", () => {
   const res = routeLocally({ jsonrpc: "2.0", id: 2, method: "tools/list" }, tool);
-  assert.deepEqual(res.result.tools, [tool]);
+  assert.equal(res.result.tools[0], tool);
+  assert.deepEqual(
+    res.result.tools.slice(1).map((tool) => tool.name),
+    ["get-actor-run", "get-dataset-items", "get-key-value-store-record", "abort-actor-run"]
+  );
+  for (const companion of COMPANION_TOOL_DEFINITIONS) {
+    assert.ok(companion.description.length > 20);
+    assert.ok(companion.inputSchema.required.length > 0);
+  }
 });
 
 test("routeLocally returns null to forward real work upstream", () => {
